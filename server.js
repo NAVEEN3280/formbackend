@@ -20,7 +20,7 @@ const PORT = process.env.PORT || 5000;
 // ✅ Allow CORS from your frontend domain (Hostinger)
 app.use(
   cors({
-    origin: ["getchris.in", "http://localhost:5173"],
+    origin: ["https://getchris.in", "http://localhost:5173"],
   })
 );
 
