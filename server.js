@@ -15,7 +15,6 @@ const FILE_PATH = path.join(__dirname, "waitlist.xlsx");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ✅ Allow only your frontend and local dev
 app.use(
   cors({
     origin: ["https://getchris.in", "http://localhost:5173"],
@@ -23,7 +22,7 @@ app.use(
 );
 
 app.use(bodyParser.json());
-app.set("trust proxy", true); // Required to get real IP on Render
+app.set("trust proxy", true);
 
 const queue = async.queue(async (task, done) => {
   try {
@@ -38,7 +37,6 @@ const fileExists = (file) => fs.existsSync(file) && fs.statSync(file).size > 0;
 app.post("/submit", async (req, res) => {
   const { email, whatsapp, businessType, challenge } = req.body;
 
-  // ✅ Get real client IP address
   let userIP =
     req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
     req.socket.remoteAddress;
@@ -49,12 +47,12 @@ app.post("/submit", async (req, res) => {
     userIP.startsWith("::ffff:127.") ||
     userIP === "127.0.0.1"
   ) {
-    userIP = "8.8.8.8"; // Fallback for localhost testing
+    userIP = "8.8.8.8";
   }
 
   console.log("📡 IP Detected:", userIP);
 
-  // ✅ Use ipapi.co to get geolocation (no token needed)
+  // ✅ Use ipinfo.io with your token
   let location = {
     ip: userIP,
     city: "Unknown",
@@ -63,17 +61,19 @@ app.post("/submit", async (req, res) => {
   };
 
   try {
-    const geoRes = await axios.get(`https://ipapi.co/${userIP}/json/`);
-    console.log("🌍 GEO response from ipapi.co:", geoRes.data);
+    const geoRes = await axios.get(
+      `https://ipinfo.io/${userIP}?token=247030d971d499`
+    );
+    console.log("🌍 IPINFO RESPONSE:", geoRes.data);
 
     location = {
       ip: userIP,
       city: geoRes.data.city || "Unknown",
       region: geoRes.data.region || "Unknown",
-      country: geoRes.data.country_name || "Unknown",
+      country: geoRes.data.country || "Unknown",
     };
   } catch (err) {
-    console.warn("⚠️ Failed to get geolocation:", err.message);
+    console.warn("⚠️ IPINFO lookup failed:", err.message);
   }
 
   const newRow = {
@@ -142,7 +142,7 @@ app.post("/submit", async (req, res) => {
       newSheet.addRow(newRow).commit();
       await newWorkbook.commit();
       fs.renameSync(tempPath, FILE_PATH);
-      console.log("✅ Appended new row for", email);
+      console.log(`✅ Appended new row for ${email}`);
     }
   });
 
