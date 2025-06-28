@@ -7,6 +7,8 @@ import { fileURLToPath } from "url";
 import async from "async";
 import ExcelJS from "exceljs";
 import axios from "axios";
+import dotenv from "dotenv";
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +17,7 @@ const FILE_PATH = path.join(__dirname, "waitlist.xlsx");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// ✅ Allow frontend origin (Render + Local)
 app.use(
   cors({
     origin: ["https://getchris.in", "http://localhost:5173"],
@@ -22,9 +25,7 @@ app.use(
 );
 
 app.use(bodyParser.json());
-
-// Trust proxy for real client IP (if deployed behind proxy like Render)
-app.set("trust proxy", true);
+app.set("trust proxy", true); // Needed for real IPs on Render
 
 const queue = async.queue(async (task, done) => {
   try {
@@ -38,11 +39,25 @@ const fileExists = (file) => fs.existsSync(file) && fs.statSync(file).size > 0;
 
 app.post("/submit", async (req, res) => {
   const { email, whatsapp, businessType, challenge } = req.body;
-  const userIP = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
 
-  console.log("📥 Submission from:", email, "IP:", userIP);
+  // ✅ Get real IP
+  let userIP =
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.socket.remoteAddress;
 
-  // Get geolocation
+  // If local or unknown IP, use fallback for testing
+  if (
+    !userIP ||
+    userIP === "::1" ||
+    userIP.startsWith("::ffff:127.") ||
+    userIP === "127.0.0.1"
+  ) {
+    userIP = "8.8.8.8"; // fallback IP for development
+  }
+
+  console.log("📡 Detected IP:", userIP);
+
+  // ✅ Get location from ipinfo.io
   let location = {
     ip: userIP,
     city: "Unknown",
@@ -51,15 +66,20 @@ app.post("/submit", async (req, res) => {
   };
 
   try {
-    const geo = await axios.get(`https://ipapi.co/${userIP}/json/`);
+    const geo = await axios.get(
+      `https://ipinfo.io/${userIP}?token=${process.env.IPINFO_TOKEN}`
+    );
+
     location = {
       ip: userIP,
       city: geo.data.city || "Unknown",
       region: geo.data.region || "Unknown",
-      country: geo.data.country_name || "Unknown",
+      country: geo.data.country || "Unknown",
     };
+
+    console.log("🌍 Location:", location);
   } catch (err) {
-    console.warn("⚠️ Failed to get geolocation:", err.message);
+    console.warn("⚠️ IP lookup failed:", err.message);
   }
 
   const newRow = {
@@ -67,7 +87,9 @@ app.post("/submit", async (req, res) => {
     whatsapp,
     businessType,
     challenge,
-    timestamp: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
+    timestamp: new Date().toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+    }),
     ip: location.ip,
     city: location.city,
     region: location.region,
@@ -95,7 +117,7 @@ app.post("/submit", async (req, res) => {
 
       worksheet.addRow(newRow).commit();
       await workbook.commit();
-      console.log("✅ First entry saved.");
+      console.log("✅ First row saved.");
     } else {
       const tempPath = FILE_PATH + ".tmp";
       const oldWorkbook = new ExcelJS.Workbook();
@@ -127,7 +149,7 @@ app.post("/submit", async (req, res) => {
       await newWorkbook.commit();
 
       fs.renameSync(tempPath, FILE_PATH);
-      console.log("✅ Appended new row with IP & location.");
+      console.log(`✅ New row appended for ${email}`);
     }
   });
 
