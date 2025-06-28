@@ -6,18 +6,15 @@ import path from "path";
 import { fileURLToPath } from "url";
 import async from "async";
 import ExcelJS from "exceljs";
+import axios from "axios";
 
-// Setup __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Path to Excel file
 const FILE_PATH = path.join(__dirname, "waitlist.xlsx");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ✅ Allow CORS from your frontend domain (Hostinger)
 app.use(
   cors({
     origin: ["https://getchris.in", "http://localhost:5173"],
@@ -26,7 +23,9 @@ app.use(
 
 app.use(bodyParser.json());
 
-// Create write queue with concurrency = 1
+// Trust proxy for real client IP (if deployed behind proxy like Render)
+app.set("trust proxy", true);
+
 const queue = async.queue(async (task, done) => {
   try {
     await task();
@@ -35,30 +34,48 @@ const queue = async.queue(async (task, done) => {
   }
 }, 1);
 
-// Helper to check if file exists and has content
-const fileExists = (file) => {
-  return fs.existsSync(file) && fs.statSync(file).size > 0;
-};
+const fileExists = (file) => fs.existsSync(file) && fs.statSync(file).size > 0;
 
-// POST route to collect waitlist data
-app.post("/submit", (req, res) => {
+app.post("/submit", async (req, res) => {
   const { email, whatsapp, businessType, challenge } = req.body;
+  const userIP = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
 
-  console.log("📥 New submission from:", email);
+  console.log("📥 Submission from:", email, "IP:", userIP);
+
+  // Get geolocation
+  let location = {
+    ip: userIP,
+    city: "Unknown",
+    region: "Unknown",
+    country: "Unknown",
+  };
+
+  try {
+    const geo = await axios.get(`https://ipapi.co/${userIP}/json/`);
+    location = {
+      ip: userIP,
+      city: geo.data.city || "Unknown",
+      region: geo.data.region || "Unknown",
+      country: geo.data.country_name || "Unknown",
+    };
+  } catch (err) {
+    console.warn("⚠️ Failed to get geolocation:", err.message);
+  }
+
+  const newRow = {
+    email,
+    whatsapp,
+    businessType,
+    challenge,
+    timestamp: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
+    ip: location.ip,
+    city: location.city,
+    region: location.region,
+    country: location.country,
+  };
 
   queue.push(async () => {
-    const newRow = {
-      email,
-      whatsapp,
-      businessType,
-      challenge,
-      timestamp: new Date().toLocaleString("en-IN", {
-        timeZone: "Asia/Kolkata",
-      }),
-    };
-
     if (!fileExists(FILE_PATH)) {
-      // First-time creation
       const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
         filename: FILE_PATH,
       });
@@ -70,15 +87,17 @@ app.post("/submit", (req, res) => {
         { header: "Business Type", key: "businessType", width: 25 },
         { header: "Challenge", key: "challenge", width: 40 },
         { header: "Timestamp", key: "timestamp", width: 30 },
+        { header: "IP", key: "ip", width: 20 },
+        { header: "City", key: "city", width: 20 },
+        { header: "Region", key: "region", width: 20 },
+        { header: "Country", key: "country", width: 20 },
       ];
 
       worksheet.addRow(newRow).commit();
       await workbook.commit();
-      console.log("✅ Created and saved first entry.");
+      console.log("✅ First entry saved.");
     } else {
-      // Append by reading old + writing new
       const tempPath = FILE_PATH + ".tmp";
-
       const oldWorkbook = new ExcelJS.Workbook();
       await oldWorkbook.xlsx.readFile(FILE_PATH);
       const oldSheet = oldWorkbook.getWorksheet("Waitlist");
@@ -94,26 +113,27 @@ app.post("/submit", (req, res) => {
         { header: "Business Type", key: "businessType", width: 25 },
         { header: "Challenge", key: "challenge", width: 40 },
         { header: "Timestamp", key: "timestamp", width: 30 },
+        { header: "IP", key: "ip", width: 20 },
+        { header: "City", key: "city", width: 20 },
+        { header: "Region", key: "region", width: 20 },
+        { header: "Country", key: "country", width: 20 },
       ];
 
-      // Copy old rows
       oldSheet.eachRow({ includeEmpty: false }, (row) => {
         newSheet.addRow(row.values.slice(1)).commit();
       });
 
-      // Add new row
       newSheet.addRow(newRow).commit();
-
       await newWorkbook.commit();
+
       fs.renameSync(tempPath, FILE_PATH);
-      console.log(`✅ Appended new row for ${email}`);
+      console.log("✅ Appended new row with IP & location.");
     }
   });
 
   res.json({ success: true });
 });
 
-// Optional download endpoint
 app.get("/download", (req, res) => {
   if (fs.existsSync(FILE_PATH)) {
     res.download(FILE_PATH, "waitlist.xlsx");
@@ -122,7 +142,6 @@ app.get("/download", (req, res) => {
   }
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
