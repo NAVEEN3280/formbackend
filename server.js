@@ -7,8 +7,6 @@ import { fileURLToPath } from "url";
 import async from "async";
 import ExcelJS from "exceljs";
 import axios from "axios";
-import dotenv from "dotenv";
-dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,7 +15,7 @@ const FILE_PATH = path.join(__dirname, "waitlist.xlsx");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ✅ Allow frontend origin (Render + Local)
+// ✅ Allow only your frontend and local dev
 app.use(
   cors({
     origin: ["https://getchris.in", "http://localhost:5173"],
@@ -25,7 +23,7 @@ app.use(
 );
 
 app.use(bodyParser.json());
-app.set("trust proxy", true); // Needed for real IPs on Render
+app.set("trust proxy", true); // Required to get real IP on Render
 
 const queue = async.queue(async (task, done) => {
   try {
@@ -40,24 +38,23 @@ const fileExists = (file) => fs.existsSync(file) && fs.statSync(file).size > 0;
 app.post("/submit", async (req, res) => {
   const { email, whatsapp, businessType, challenge } = req.body;
 
-  // ✅ Get real IP
+  // ✅ Get real client IP address
   let userIP =
     req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
     req.socket.remoteAddress;
 
-  // If local or unknown IP, use fallback for testing
   if (
     !userIP ||
     userIP === "::1" ||
     userIP.startsWith("::ffff:127.") ||
     userIP === "127.0.0.1"
   ) {
-    userIP = "8.8.8.8"; // fallback IP for development
+    userIP = "8.8.8.8"; // Fallback for localhost testing
   }
 
-  console.log("📡 Detected IP:", userIP);
+  console.log("📡 IP Detected:", userIP);
 
-  // ✅ Get location from ipinfo.io
+  // ✅ Use ipapi.co to get geolocation (no token needed)
   let location = {
     ip: userIP,
     city: "Unknown",
@@ -66,20 +63,17 @@ app.post("/submit", async (req, res) => {
   };
 
   try {
-    const geo = await axios.get(
-      `https://ipinfo.io/${userIP}?token=${process.env.IPINFO_TOKEN}`
-    );
+    const geoRes = await axios.get(`https://ipapi.co/${userIP}/json/`);
+    console.log("🌍 GEO response from ipapi.co:", geoRes.data);
 
     location = {
       ip: userIP,
-      city: geo.data.city || "Unknown",
-      region: geo.data.region || "Unknown",
-      country: geo.data.country || "Unknown",
+      city: geoRes.data.city || "Unknown",
+      region: geoRes.data.region || "Unknown",
+      country: geoRes.data.country_name || "Unknown",
     };
-
-    console.log("🌍 Location:", location);
   } catch (err) {
-    console.warn("⚠️ IP lookup failed:", err.message);
+    console.warn("⚠️ Failed to get geolocation:", err.message);
   }
 
   const newRow = {
@@ -147,9 +141,8 @@ app.post("/submit", async (req, res) => {
 
       newSheet.addRow(newRow).commit();
       await newWorkbook.commit();
-
       fs.renameSync(tempPath, FILE_PATH);
-      console.log(`✅ New row appended for ${email}`);
+      console.log("✅ Appended new row for", email);
     }
   });
 
